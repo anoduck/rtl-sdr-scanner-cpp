@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 as build
+FROM docker.io/ubuntu:22.04 as build
 ENV DEBIAN_FRONTEND noninteractive
 RUN apt-get update && \
     apt-get install -y curl git zip build-essential cmake ccache tzdata libspdlog-dev libliquid-dev nlohmann-json3-dev libmosquitto-dev libgtest-dev libgmock-dev libusb-1.0-0-dev libfftw3-dev libboost-all-dev libsoapysdr-dev
@@ -32,7 +32,7 @@ RUN cmake -B /root/auto-sdr/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="
     strip /root/auto-sdr/build/auto_sdr.debug -o /root/auto-sdr/build/auto_sdr && \
     strip /root/auto-sdr/build/auto_sdr_test
 
-FROM ubuntu:22.04 as run
+FROM docker.io/ubuntu:22.04 as run
 ENV DEBIAN_FRONTEND noninteractive
 RUN apt-get update && \
     apt-get install -y tzdata libspdlog1 libliquid2d nlohmann-json3-dev libmosquitto1 libusb-1.0-0 libfftw3-bin
