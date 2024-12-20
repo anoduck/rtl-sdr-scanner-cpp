@@ -1,6 +1,7 @@
 services:
   broker:
-    image: eclipse-mosquitto:latest
+    image: docker.io/eclipse-mosquitto:latest
+    container_name: rtl-sdr-scanner-cpp_broker_1
     env_file: .env
     restart: on-failure
     ports:
@@ -20,7 +21,8 @@ services:
         mosquitto_passwd -U /mosquitto/config/password.txt
         mosquitto -c /mosquitto/config/mosquitto.conf
   sdr-scanner:
-    image: shajen/sdr-scanner:${SDR_SCANNER_TAG:-latest}
+    image: localhost/shajen/sdr-scanner:${SDR_SCANNER_TAG:-latest}
+    container_name: rtl-sdr-scanner-cpp_sdr-scanner_1
     env_file: .env
     restart: on-failure
     depends_on:
@@ -30,7 +32,8 @@ services:
     devices:
       - /dev/bus/usb:/dev/bus/usb
   monitor-setup:
-    image: shajen/monitor:${MONITOR_TAG:-latest}
+    image: docker.io/shajen/monitor:${MONITOR_TAG:-devel}
+    container_name: rtl-sdr-scanner-cpp_monitor-setup_1
     env_file: .env
     restart: on-failure
     depends_on:
@@ -40,7 +43,8 @@ services:
       - monitor_data:/usr/src/sdr-panel/public/media
     command: /entrypoint/setup.sh
   monitor-server:
-    image: shajen/monitor:${MONITOR_TAG:-latest}
+    image: docker.io/shajen/monitor:${MONITOR_TAG:-devel}
+    container_name: rtl-sdr-scanner-cpp_monitor-server_1
     env_file: .env
     restart: on-failure
     depends_on:
@@ -53,7 +57,8 @@ services:
     ports:
       - ${HTTP_PORT:-8000}:8000
   monitor-worker:
-    image: shajen/monitor:${MONITOR_TAG:-latest}
+    image: docker.io/shajen/monitor:${MONITOR_TAG:-devel}
+    container_name: rtl-sdr-scanner-cpp_monitor-worker_1
     env_file: .env
     restart: on-failure
     depends_on:
