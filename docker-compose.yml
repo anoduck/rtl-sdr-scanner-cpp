@@ -2,6 +2,7 @@
 services:
   broker:
     image: docker.io/eclipse-mosquitto:latest
+    container_name: rssc-broker
     env_file: .env
     restart: on-failure
     ports:
@@ -23,6 +24,7 @@ services:
 
   scanner:
     image: localhost/sdr-scanner:${SDR_SCANNER_TAG:-latest}
+    container_name: rssc-scanner
     build:
       dockerfile: ./Dockerfile
     env_file: .env
@@ -38,6 +40,7 @@ services:
 
   monitor-setup:
     image: docker.io/shajen/monitor:${MONITOR_TAG:-latest}
+    container_name: rssc-monitor-setup
     env_file: .env
     restart: on-failure
     depends_on:
@@ -51,6 +54,7 @@ services:
 
   monitor-server:
     image: docker.io/shajen/monitor:${MONITOR_TAG:-latest}
+    container_name: rssc-server
     env_file: .env
     restart: on-failure
     depends_on:
@@ -67,8 +71,10 @@ services:
 
   monitor-worker:
     image: docker.io/shajen/monitor:${MONITOR_TAG:-latest}
+    container_name: rssc-worker
     env_file: .env
     restart: on-failure
+    # Commented as container is not ready
     # depends_on:
     #   monitor-setup:
     #     condition: service_completed_successfully

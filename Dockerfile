@@ -47,7 +47,6 @@ COPY --from=build /root/auto-sdr/build/auto_sdr_test /usr/bin/auto_sdr_test
 CMD /usr/bin/auto_sdr_test
 
 FROM run
-COPY ./config.json /config/config.json
 COPY --from=build /usr/local/lib/libsdrplay_api.so* /usr/local/lib/
 COPY --from=build /usr/local/bin/sdrplay_apiService /usr/local/bin/
 COPY --from=build /usr/local/lib/SoapySDR/modules0.8/libsdrPlaySupport.so /usr/local/lib/SoapySDR/modules0.8/
