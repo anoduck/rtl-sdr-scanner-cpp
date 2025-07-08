@@ -1,7 +1,7 @@
+#! :set filetype=yaml.docker-compose
 services:
   broker:
     image: docker.io/eclipse-mosquitto:latest
-    container_name: rtl-sdr-scanner-cpp_broker_1
     env_file: .env
     restart: on-failure
     ports:
@@ -20,55 +20,65 @@ services:
         echo "${MQTT_USER:-admin}:${MQTT_PASSWORD:-password}" > /mosquitto/config/password.txt
         mosquitto_passwd -U /mosquitto/config/password.txt
         mosquitto -c /mosquitto/config/mosquitto.conf
-  sdr-scanner:
-    image: localhost/shajen/sdr-scanner:${SDR_SCANNER_TAG:-latest}
-    container_name: rtl-sdr-scanner-cpp_sdr-scanner_1
+
+  scanner:
+    image: localhost/sdr-scanner:${SDR_SCANNER_TAG:-latest}
+    build:
+      dockerfile: ./Dockerfile
     env_file: .env
     restart: on-failure
     depends_on:
       - broker
     volumes:
-      - sdr_config:/config
+      - ./timezone:/etc/timezone:ro
+      - ./localtime:/etc/localtime:ro
+      - ./config/config.json:/config/config.json:rw
     devices:
       - /dev/bus/usb:/dev/bus/usb
+
   monitor-setup:
-    image: docker.io/shajen/monitor:${MONITOR_TAG:-devel}
-    container_name: rtl-sdr-scanner-cpp_monitor-setup_1
+    image: docker.io/shajen/monitor:${MONITOR_TAG:-latest}
     env_file: .env
     restart: on-failure
     depends_on:
       - broker
     volumes:
+      - ./timezone:/etc/timezone:ro
+      - ./localtime:/etc/localtime:ro
       - monitor_db:/usr/src/sdr-panel/db
       - monitor_data:/usr/src/sdr-panel/public/media
     command: /entrypoint/setup.sh
+
   monitor-server:
-    image: docker.io/shajen/monitor:${MONITOR_TAG:-devel}
-    container_name: rtl-sdr-scanner-cpp_monitor-server_1
+    image: docker.io/shajen/monitor:${MONITOR_TAG:-latest}
     env_file: .env
     restart: on-failure
     depends_on:
       monitor-setup:
         condition: service_completed_successfully
     volumes:
+      - ./timezone:/etc/timezone:ro
+      - ./localtime:/etc/localtime:ro
       - monitor_db:/usr/src/sdr-panel/db
       - monitor_data:/usr/src/sdr-panel/public/media
     command: /entrypoint/server.sh
     ports:
       - ${HTTP_PORT:-8000}:8000
+
   monitor-worker:
-    image: docker.io/shajen/monitor:${MONITOR_TAG:-devel}
-    container_name: rtl-sdr-scanner-cpp_monitor-worker_1
+    image: docker.io/shajen/monitor:${MONITOR_TAG:-latest}
     env_file: .env
     restart: on-failure
-    depends_on:
-      monitor-setup:
-        condition: service_completed_successfully
+    # depends_on:
+    #   monitor-setup:
+    #     condition: service_completed_successfully
     volumes:
+      - ./timezone:/etc/timezone:ro
+      - ./localtime:/etc/localtime:ro
       - monitor_db:/usr/src/sdr-panel/db
       - monitor_data:/usr/src/sdr-panel/public/media
     command: /entrypoint/worker.sh
+
 volumes:
-  sdr_config:
   monitor_db:
   monitor_data:
