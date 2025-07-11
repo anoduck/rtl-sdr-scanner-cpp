@@ -4,9 +4,22 @@
       "device_serial": "auto",
       "ranges": [
         {
-          "start": 144000000,
-          "stop": 146000000,
-          "sample_rate": 2048000
+          "start": 299000000,
+          "stop": 319000000,
+          "sample_rate": 2048000,
+          "fft": 16384
+        },
+        {
+          "start": 417000000,
+          "stop": 434100000,
+          "sample_rate": 2048000,
+          "fft": 16384
+        },
+        {
+          "start": 868000000,
+          "stop": 916000000,
+          "sample_rate": 2048000,
+          "fft": 16384
         }
       ]
     }
@@ -14,13 +27,8 @@
   "ignored_frequencies": [],
   "devices": {
     "rtl_sdr": {
-      "ppm_error": 0,
-      "tuner_gain": 0.0,
-      "offset": 0
-    },
-    "hack_rf": {
-      "lna_gain": 0,
-      "vga_gain": 0,
+      "ppm_error": 5,
+      "tuner_gain": 49.6,
       "offset": 0
     }
   },
@@ -30,7 +38,7 @@
     "min_sample_rate": 16000
   },
   "detection": {
-    "frequency_grouping_size": 10000,
+    "frequency_grouping_size": 10000000,
     "frequency_range_scanning_time_ms": 64,
     "noise_learning_time_seconds": 30,
     "noise_detection_margin": 10,

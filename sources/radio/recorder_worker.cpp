@@ -4,6 +4,7 @@
 
 RecorderWorker::RecorderWorker(
     const Config &config,
+    std::unique_ptr<CoreManager::Core> core,
     DataController &dataController,
     const FrequencyRange &inputFrequencyRange,
     const FrequencyRange &outputFrequency,
@@ -11,6 +12,7 @@ RecorderWorker::RecorderWorker(
     std::condition_variable &inCv,
     std::deque<WorkerInputSamples> &inSamples)
     : m_config(config),
+      m_core(std::move(core)),
       m_inputFrequencyRange(inputFrequencyRange),
       m_outputFrequencyRange(outputFrequency),
       m_dataController(dataController),
@@ -64,7 +66,6 @@ void RecorderWorker::processSamples(WorkerInputSamples &&inputSamples) {
   }
   if (m_decimatorBuffer.size() < downSamples) {
     m_decimatorBuffer.resize(downSamples);
-    Logger::debug("RecorderWrk", "thread id: {}, decimator buffer resized, size: {}", getThreadId(), m_decimatorBuffer.size());
   }
   if (!m_decimator) {
     m_decimator = std::make_unique<Decimator>(m_config, decimateRate);

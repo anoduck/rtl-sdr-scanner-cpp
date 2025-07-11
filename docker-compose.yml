@@ -1,65 +1,90 @@
+#! :set filetype=yaml.docker-compose
 services:
-  sdr-broker:
-    image: eclipse-mosquitto:latest
+  broker:
+    image: docker.io/eclipse-mosquitto:latest
+    container_name: rssc-broker
+    env_file: .env
     restart: on-failure
+    ports:
+      - ${MQTT_PORT_TCP:-1883}:${MQTT_PORT_TCP:-1883}
+      - ${MQTT_PORT_WS:-9001}:${MQTT_PORT_WS:-9001}
     command:
       - /bin/sh
       - -c
       - |
-        echo "listener 1883" > /mosquitto/config/mosquitto.conf
+        echo "listener ${MQTT_PORT_TCP:-1883}" > /mosquitto/config/mosquitto.conf
+        echo "protocol mqtt" >> /mosquitto/config/mosquitto.conf
+        echo "listener ${MQTT_PORT_WS:-9001}" >> /mosquitto/config/mosquitto.conf
+        echo "protocol websockets" >> /mosquitto/config/mosquitto.conf
         echo "allow_anonymous false" >> /mosquitto/config/mosquitto.conf
         echo "password_file /mosquitto/config/password.txt" >> /mosquitto/config/mosquitto.conf
-        echo "admin:password" > /mosquitto/config/password.txt
+        echo "${MQTT_USER:-admin}:${MQTT_PASSWORD:-password}" > /mosquitto/config/password.txt
         mosquitto_passwd -U /mosquitto/config/password.txt
         mosquitto -c /mosquitto/config/mosquitto.conf
-  sdr-scanner:
-    image: shajen/sdr-scanner:latest
+
+  scanner:
+    image: localhost/sdr-scanner:${SDR_SCANNER_TAG:-latest}
+    container_name: rssc-scanner
+    build:
+      dockerfile: ./Dockerfile
+    env_file: .env
     restart: on-failure
     depends_on:
-      - sdr-broker
+      - broker
     volumes:
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
-      - ./config.json:/config.json
+      - ./timezone:/etc/timezone:ro
+      - ./localtime:/etc/localtime:ro
+      - ./config/config.json:/config/config.json:rw
     devices:
       - /dev/bus/usb:/dev/bus/usb
-  sdr-monitor-setup:
-    image: shajen/sdr-monitor:latest
+
+  monitor-setup:
+    image: docker.io/shajen/monitor:${MONITOR_TAG:-latest}
+    container_name: rssc-monitor-setup
+    env_file: .env
     restart: on-failure
     depends_on:
-      - sdr-broker
+      - broker
     volumes:
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
+      - ./timezone:/etc/timezone:ro
+      - ./localtime:/etc/localtime:ro
       - monitor_db:/usr/src/sdr-panel/db
       - monitor_data:/usr/src/sdr-panel/public/media
-    command: bash -c "python3 manage.py migrate && DJANGO_SUPERUSER_PASSWORD=password python3 manage.py createsuperuser --noinput --username admin --email admin@local.local &> /dev/null || true"
-  sdr-monitor-server:
-    image: shajen/sdr-monitor:latest
+    command: /entrypoint/setup.sh
+
+  monitor-server:
+    image: docker.io/shajen/monitor:${MONITOR_TAG:-latest}
+    container_name: rssc-server
+    env_file: .env
     restart: on-failure
     depends_on:
-      sdr-monitor-setup:
+      monitor-setup:
         condition: service_completed_successfully
     volumes:
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
+      - ./timezone:/etc/timezone:ro
+      - ./localtime:/etc/localtime:ro
       - monitor_db:/usr/src/sdr-panel/db
       - monitor_data:/usr/src/sdr-panel/public/media
-    command: python3 manage.py runserver 0.0.0.0:8000
+    command: /entrypoint/server.sh
     ports:
-      - 8000:8000
-  sdr-monitor-reader:
-    image: shajen/sdr-monitor:latest
+      - ${HTTP_PORT:-8000}:8000
+
+  monitor-worker:
+    image: docker.io/shajen/monitor:${MONITOR_TAG:-latest}
+    container_name: rssc-worker
+    env_file: .env
     restart: on-failure
-    depends_on:
-      sdr-monitor-setup:
-        condition: service_completed_successfully
+    # Commented as container is not ready
+    # depends_on:
+    #   monitor-setup:
+    #     condition: service_completed_successfully
     volumes:
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
+      - ./timezone:/etc/timezone:ro
+      - ./localtime:/etc/localtime:ro
       - monitor_db:/usr/src/sdr-panel/db
       - monitor_data:/usr/src/sdr-panel/public/media
-    command: python3 manage.py runscript mqtt_reader
+    command: /entrypoint/worker.sh
+
 volumes:
   monitor_db:
   monitor_data:

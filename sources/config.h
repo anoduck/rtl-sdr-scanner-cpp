@@ -1,12 +1,13 @@
 #pragma once
 
 #include <radio/help_structures.h>
+#include <radio/sdr_device.h>
 #include <spdlog/spdlog.h>
 
 #include <nlohmann/json.hpp>
 #include <vector>
 
-struct UserDefinedFrequencyRange {
+struct DefinedFrequencyRange {
   const Frequency start;
   const Frequency stop;
   const Frequency sampleRate;
@@ -15,24 +16,22 @@ struct UserDefinedFrequencyRange {
   std::string toString() const;
 };
 
-struct UserDefinedFrequencyRanges {
-  const std::string serial;
-  const std::vector<UserDefinedFrequencyRange> ranges;
-};
-
 using IgnoredFrequencies = std::vector<FrequencyRange>;
 
 class Config {
  public:
   struct InternalJson {
     nlohmann::json masterJson;
-    nlohmann::json slaveJson;
   };
 
-  Config(const std::string& path, const std::string& config);
-  void log();
+  Config(const std::string& path);
+  void log() const;
+  nlohmann::json getConfig() const;
+  nlohmann::json toJson(const SdrDevice::Device& sdrDevice, bool isEnabled) const;
+  void updateConfig(const std::string& data);
+  void updateConfig(const SdrDevice::Device& sdrDevice, bool isEnabled);
 
-  std::vector<UserDefinedFrequencyRanges> userDefinedFrequencyRanges() const;
+  std::vector<nlohmann::json> devices() const;
   IgnoredFrequencies ignoredFrequencyRanges() const;
 
   std::chrono::milliseconds maxRecordingNoiseTime() const;
@@ -49,14 +48,6 @@ class Config {
   spdlog::level::level_enum logLevelFile() const;
   std::string logDir() const;
 
-  uint32_t rtlSdrPpm() const;
-  float rtlSdrGain() const;
-  int32_t rtlSdrOffset() const;
-
-  uint32_t hackRfLnaGain() const;
-  uint32_t hackRfVgaGain() const;
-  int32_t hackRfOffset() const;
-
   uint8_t cores() const;
   uint64_t memoryLimit() const;
 
@@ -70,9 +61,9 @@ class Config {
   float spectrogramFactor() const;
 
  private:
-  const InternalJson m_json;
+  InternalJson m_json;
+  const std::string m_configPath;
 
-  const std::vector<UserDefinedFrequencyRanges> m_userDefinedFrequencyRanges;
   const IgnoredFrequencies m_ignoredFrequencies;
 
   const std::chrono::milliseconds m_maxRecordingNoiseTime;
@@ -88,14 +79,6 @@ class Config {
   const std::string m_logsDirectory;
   const spdlog::level::level_enum m_consoleLogLevel;
   const spdlog::level::level_enum m_fileLogLevel;
-
-  const uint32_t m_rtlSdrPpm;
-  const float m_rtlSdrGain;
-  const int32_t m_rtlSdrRadioOffset;
-
-  const uint32_t m_hackRfLnaGain;
-  const uint32_t m_hackRfVgaGain;
-  const int32_t m_hackRfRadioOffset;
 
   const uint8_t m_cores;
   const uint64_t m_memoryLimit;

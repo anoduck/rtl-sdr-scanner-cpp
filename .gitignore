@@ -11,3 +11,4 @@ sync.sh
 download*.sh
 .bash_history
 *.png
+config.json

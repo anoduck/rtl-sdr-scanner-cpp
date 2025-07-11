@@ -3,11 +3,11 @@
 #include <logger.h>
 #include <utils.h>
 
-SdrScanner::SdrScanner(const Config& config, const std::vector<UserDefinedFrequencyRange>& ranges, std::unique_ptr<SdrDevice>&& device, Mqtt& mqtt)
+SdrScanner::SdrScanner(const Config& config, CoreManager& coreManager, const std::vector<DefinedFrequencyRange>& ranges, std::unique_ptr<SdrDevice>&& device, Mqtt& mqtt)
     : m_config(config),
       m_device(std::move(device)),
       m_dataController(config, mqtt, m_device->name()),
-      m_recorder(config, m_device->offset(), m_dataController),
+      m_recorder(config, coreManager, m_device->offset(), m_dataController),
       m_performanceLogger("Scanner"),
       m_isRunning(true),
       m_isManualRecordingWaiting(false) {
@@ -28,16 +28,14 @@ SdrScanner::SdrScanner(const Config& config, const std::vector<UserDefinedFreque
     Logger::info("Scanner", "frequency range, {}", frequencyRange.toString());
   }
 
-  if (splittedFrequencyRanges.empty()) {
-    throw std::runtime_error("empty frequency ranges");
-  }
-
   m_thread = std::make_unique<std::thread>([this, splittedFrequencyRanges]() {
     Logger::info("Scanner", "start thread id: {}", getThreadId());
     setThreadParams("scanner", PRIORITY::HIGH);
     try {
       while (m_isRunning) {
-        if (splittedFrequencyRanges.size() == 1) {
+        if (splittedFrequencyRanges.empty()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        } else if (splittedFrequencyRanges.size() == 1) {
           startStream(splittedFrequencyRanges.front(), true);
         } else {
           for (const auto& frequencyRange : splittedFrequencyRanges) {
@@ -104,7 +102,7 @@ void SdrScanner::checkManualRecording() {
       while (m_isRunning && m_device->isDataAvailable()) {
         m_performanceLogger.newSample();
         auto&& samples = m_device->getStreamData();
-        m_dataController.pushTransmission(samples.time, frequencyRange, std::move(samples.data), true);
+        m_dataController.pushTransmission(samples.time, frequencyRange, samples.data, true);
       }
     }
     Logger::info("Scanner", "finish manual recording: {}", frequencyRange.toString());

@@ -3,6 +3,7 @@
 #include <algorithms/decimator.h>
 #include <algorithms/spectrogram.h>
 #include <algorithms/transmission_detector.h>
+#include <core_manager.h>
 #include <network/data_controller.h>
 #include <utils.h>
 
@@ -16,7 +17,7 @@
 
 struct WorkerInputSamples {
   std::chrono::milliseconds time;
-  std::shared_ptr<std::vector<std::complex<float>>> samples;
+  std::shared_ptr<std::vector<ReadySample>> samples;
   FrequencyRange frequencyRange;
   bool isActive;
 };
@@ -25,6 +26,7 @@ class RecorderWorker {
  public:
   RecorderWorker(
       const Config &config,
+      std::unique_ptr<CoreManager::Core> core,
       DataController &dataController,
       const FrequencyRange &inputFrequencyRange,
       const FrequencyRange &outputFrequency,
@@ -37,13 +39,14 @@ class RecorderWorker {
   void processSamples(WorkerInputSamples &&inputSamples);
 
   const Config &m_config;
+  std::unique_ptr<CoreManager::Core> m_core;
   const FrequencyRange m_inputFrequencyRange;
   const FrequencyRange m_outputFrequencyRange;
   DataController &m_dataController;
 
-  std::vector<std::complex<float>> m_samplesData;
-  std::vector<std::complex<float>> m_shiftData;
-  std::vector<std::complex<float>> m_decimatorBuffer;
+  std::vector<ReadySample> m_samplesData;
+  std::vector<ReadySample> m_shiftData;
+  std::vector<ReadySample> m_decimatorBuffer;
   std::unique_ptr<Decimator> m_decimator;
 
   std::mutex &m_mutex;

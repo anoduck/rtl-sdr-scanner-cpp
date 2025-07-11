@@ -7,8 +7,9 @@
 
 #include <map>
 
-Recorder::Recorder(const Config& config, int32_t offset, DataController& dataController)
+Recorder::Recorder(const Config& config, CoreManager& coreManager, int32_t offset, DataController& dataController)
     : m_config(config),
+      m_coreManager(coreManager),
       m_offset(offset),
       m_dataController(dataController),
       m_transmissionDetector(config),
@@ -25,7 +26,7 @@ void Recorder::clear() {
   m_lastActiveDataTime = m_lastDataTime;
 }
 
-bool Recorder::isTransmission(const std::chrono::milliseconds& time, const FrequencyRange& frequencyRange, std::vector<uint8_t>&& samples) {
+bool Recorder::isTransmission(const std::chrono::milliseconds& time, const FrequencyRange& frequencyRange, std::vector<RawSample>&& samples) {
   const auto signals = m_samplesProcessor.process(samples, m_rawBuffer, frequencyRange, m_offset);
   const auto activeTransmissions = m_transmissionDetector.getTransmissions(time, signals);
   Logger::trace("Recorder", "active transmissions finished, count: {}", activeTransmissions.size());
@@ -33,12 +34,12 @@ bool Recorder::isTransmission(const std::chrono::milliseconds& time, const Frequ
   return (!activeTransmissions.empty());
 }
 
-void Recorder::processSamples(const std::chrono::milliseconds& time, const FrequencyRange& frequencyRange, std::vector<uint8_t>&& samples) {
-  Logger::debug("Recorder", "samples processing started");
+void Recorder::processSamples(const std::chrono::milliseconds& time, const FrequencyRange& frequencyRange, std::vector<RawSample>&& samples) {
+  Logger::trace("Recorder", "samples processing started");
   m_performanceLogger.newSample();
   const auto signals = m_samplesProcessor.process(samples, m_rawBuffer, frequencyRange, m_offset);
   processSignals(time, frequencyRange, signals);
-  const auto rawBufferSamples = samples.size() / 2;
+  const auto rawBufferSamples = samples.size();
   const auto activeTransmissions = m_transmissionDetector.getTransmissions(time, signals);
   Logger::trace("Recorder", "active transmissions finished, count: {}", activeTransmissions.size());
 
@@ -54,19 +55,20 @@ void Recorder::processSamples(const std::chrono::milliseconds& time, const Frequ
       Logger::info("Recorder", "erase worker {}, total workers: {}", frequencyToString(frequencyRange.center()), m_workers.size());
     }
   }
-  std::shared_ptr<std::vector<std::complex<float>>> sharedSamples;
+  std::shared_ptr<std::vector<ReadySample>> sharedSamples;
   for (const auto& [transmissionSampleRate, isActive] : activeTransmissions) {
     if (isActive) {
       m_lastActiveDataTime = std::max(m_lastActiveDataTime, time);
     }
     if (m_workers.count(transmissionSampleRate) == 0) {
-      if (m_config.cores() <= m_workers.size()) {
+      auto core = m_coreManager.getCore();
+      if (!core) {
         Logger::warn("Recorder", "reached concurrent transmissions limit, skip {}", frequencyToString(transmissionSampleRate.center()));
         continue;
       }
       { Logger::info("Recorder", "create worker {}, total workers: {}", frequencyToString(transmissionSampleRate.center()), m_workers.size() + 1); }
       auto rws = std::make_unique<RecorderWorkerStruct>();
-      auto worker = std::make_unique<RecorderWorker>(m_config, m_dataController, frequencyRange, transmissionSampleRate, rws->mutex, rws->cv, rws->samples);
+      auto worker = std::make_unique<RecorderWorker>(m_config, std::move(core), m_dataController, frequencyRange, transmissionSampleRate, rws->mutex, rws->cv, rws->samples);
       rws->worker = std::move(worker);
       m_workers.insert({transmissionSampleRate, std::move(rws)});
     }
@@ -77,7 +79,7 @@ void Recorder::processSamples(const std::chrono::milliseconds& time, const Frequ
         Logger::warn("Recorder", "reached memory limit, skipping samples");
         break;
       } else {
-        sharedSamples = std::make_shared<std::vector<std::complex<float>>>(std::move(m_rawBuffer));
+        sharedSamples = std::make_shared<std::vector<ReadySample>>(std::move(m_rawBuffer));
         sharedSamples->resize(rawBufferSamples);
         m_rawBuffer = {};
       }
@@ -86,7 +88,7 @@ void Recorder::processSamples(const std::chrono::milliseconds& time, const Frequ
     rws->cv.notify_one();
     Logger::debug("Recorder", "push worker input samples, queue size: {}", rws->samples.size());
   }
-  Logger::debug("Recorder", "samples processing finished");
+  Logger::trace("Recorder", "samples processing finished");
 }
 
 bool Recorder::isTransmissionInProgress() const { return m_lastDataTime <= m_lastActiveDataTime + m_config.maxRecordingNoiseTime(); }

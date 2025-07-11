@@ -9,10 +9,24 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <fstream>
 #include <numeric>
 #include <stdexcept>
 #include <thread>
+
+std::string generateRandomHash() {
+  auto generator = boost::uuids::random_generator();
+  auto uuid = boost::uuids::to_string(generator());
+  std::remove(uuid.begin(), uuid.end(), '-');
+  return uuid;
+}
+
+std::string getId() {
+  const auto static id = generateRandomHash();
+  return id;
+}
 
 void setThreadParams(const std::string &name, PRIORITY priority) {
   pthread_setname_np(pthread_self(), name.c_str());
@@ -20,6 +34,14 @@ void setThreadParams(const std::string &name, PRIORITY priority) {
 }
 
 uint32_t getThreadId() { return gettid(); }
+
+std::string removeZerosFromBegging(const std::string &string) {
+  uint32_t i = 0;
+  while (i < string.length() && string[i] == '0') {
+    i++;
+  }
+  return string.substr(i, string.length() - i);
+}
 
 bool isMemoryLimitReached(uint64_t limit) {
   if (limit == 0) {
@@ -31,7 +53,11 @@ bool isMemoryLimitReached(uint64_t limit) {
     statm.close();
     vmSize = vmSize * sysconf(_SC_PAGE_SIZE) / 1024 / 1024;
     vmRss = vmRss * sysconf(_SC_PAGE_SIZE) / 1024 / 1024;
-    Logger::info("memory", "total: {} MB, rss: {} MB", vmSize, vmRss);
+    if (limit <= vmRss) {
+      Logger::warn("memory", "total: {} MB, rss: {} MB", vmSize, vmRss);
+    } else {
+      Logger::debug("memory", "total: {} MB, rss: {} MB", vmSize, vmRss);
+    }
     return limit <= vmRss;
   }
 }
@@ -41,9 +67,9 @@ uint32_t getSamplesCount(const Frequency &sampleRate, const std::chrono::millise
     if (time.count() * sampleRate % 1000 != 0) {
       throw std::runtime_error("selected time not fit to sample rate");
     }
-    return std::max(static_cast<uint32_t>(2 * time.count() * sampleRate / 1000), minSamplesCount);
+    return std::max(static_cast<uint32_t>(time.count() * sampleRate / 1000), minSamplesCount);
   } else {
-    const auto samplesCount = std::lround(sampleRate / (1000.0f / time.count()) * 2);
+    const auto samplesCount = std::lround(sampleRate / (1000.0f / time.count()));
     if (samplesCount % 512 != 0) {
       Logger::warn("utils", "samples count {} not fit 512", samplesCount);
       throw std::runtime_error("selected time not fit to sample rate");
@@ -52,49 +78,26 @@ uint32_t getSamplesCount(const Frequency &sampleRate, const std::chrono::millise
   }
 }
 
-void toComplex(const uint8_t *rawBuffer, std::complex<float> *buffer, uint32_t samplesCount) {
-  static std::array<float, 256> cache;
-  static bool cacheInitialized = false;
-  if (!cacheInitialized) {
-    cacheInitialized = true;
-    for (int i = 0; i < 256; ++i) {
-      cache[i] = (static_cast<float>(i) - 127.5f) / 127.5f;
-    }
-  }
-  float *p1 = reinterpret_cast<float *>(buffer);
-  uint8_t *p2 = const_cast<uint8_t *>(rawBuffer);
-  for (uint32_t i = 0; i < samplesCount; ++i) {
-    *p1 = cache[*p2];
-    ++p1;
-    ++p2;
-  }
-}
-
 std::chrono::milliseconds time() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()); }
 
-std::vector<std::complex<float>> getShiftData(int32_t frequencyOffset, Frequency sampleRate, uint32_t samplesCount) {
-  const float floatFreqOffset{static_cast<float>(-frequencyOffset)};
-  const float floatSampleRate{static_cast<float>(sampleRate)};
-  const float floatPI{static_cast<float>(M_PI)};
-  const float imaginaryUnit{-1.0f};
-
-  const auto f = std::complex<float>(0.0f, imaginaryUnit) * 2.0f * floatPI * (floatFreqOffset / floatSampleRate);
-  std::vector<std::complex<float>> data(samplesCount);
+std::vector<ReadySample> getShiftData(int32_t frequencyOffset, Frequency sampleRate, uint32_t samplesCount) {
+  const auto f = ReadySample(0.0f, -1.0f) * 2.0f * M_PIf32 * (static_cast<float>(-frequencyOffset) / static_cast<float>(sampleRate));
+  std::vector<ReadySample> data(samplesCount);
   for (uint32_t i = 0; i < samplesCount; ++i) {
     data[i] = std::exp(f * static_cast<float>(i));
   }
   return data;
 }
 
-void shift(std::complex<float> *samples, const std::vector<std::complex<float>> &factors, uint32_t samplesCount) {
+void shift(ReadySample *samples, const std::vector<ReadySample> &factors, uint32_t samplesCount) {
   for (uint32_t i = 0; i < samplesCount; ++i) {
     samples[i] *= factors[i];
   }
 }
 
-liquid_float_complex *toLiquidComplex(std::complex<float> *ptr) { return reinterpret_cast<liquid_float_complex *>(ptr); }
+liquid_float_complex *toLiquidComplex(ReadySample *ptr) { return reinterpret_cast<liquid_float_complex *>(ptr); }
 
-std::vector<FrequencyRange> fitFrequencyRange(const UserDefinedFrequencyRange &userRange) {
+std::vector<FrequencyRange> fitFrequencyRange(const DefinedFrequencyRange &userRange) {
   const auto range = userRange.stop - userRange.start;
   if (userRange.sampleRate < range) {
     const auto cutDigits = floor(log10(userRange.sampleRate));

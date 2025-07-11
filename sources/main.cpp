@@ -1,13 +1,14 @@
 #include <algorithms/fftw_initializer.h>
 #include <algorithms/spectrogram.h>
 #include <config.h>
+#include <core_manager.h>
 #include <fftw3.h>
 #include <logger.h>
 #include <network/data_controller.h>
 #include <network/mqtt.h>
-#include <radio/hackrf_sdr_device.h>
-#include <radio/rtl_sdr_device.h>
+#include <network/remote_controller.h>
 #include <radio/sdr_scanner.h>
+#include <radio/soapy_sdr_device.h>
 #include <signal.h>
 #include <version.h>
 
@@ -19,112 +20,105 @@ void handler(int) {
 }
 
 template <typename T>
-void createScanners(const Config& config, Mqtt& mqtt, std::vector<std::unique_ptr<SdrScanner>>& scanners) {
-  for (const auto& id : T::listDevices()) {
-    for (const auto& range : config.userDefinedFrequencyRanges()) {
-      if (range.serial == id) {
-        scanners.push_back(std::make_unique<SdrScanner>(config, range.ranges, std::make_unique<T>(config, id), mqtt));
-        break;
-      }
+void updateConfig(Config& config) {
+  for (const auto& device : T::listDevices()) {
+    config.updateConfig(device, true);
+  }
+}
+
+template <typename T>
+void createScanners(const Config& config, Mqtt& mqtt, CoreManager& coreManager, std::vector<std::unique_ptr<SdrScanner>>& scanners) {
+  for (const auto& device : config.devices()) {
+    const auto serial = device["device_serial"].get<std::string>();
+    if (!device["device_enabled"].get<bool>()) {
+      Logger::info("main", "device disabled, skipping device: {}", serial);
+      continue;
     }
-    for (const auto& range : config.userDefinedFrequencyRanges()) {
-      if (range.serial == "auto") {
-        scanners.push_back(std::make_unique<SdrScanner>(config, range.ranges, std::make_unique<T>(config, id), mqtt));
-        break;
+    const auto offset = device.contains("device_offset") ? stoi(device["device_offset"].get<std::string>()) : 0;
+    const auto gains = device["device_gains"];
+    std::vector<DefinedFrequencyRange> ranges;
+    for (const auto& range : device["ranges"]) {
+      const auto sampleRate = range["sample_rate"].get<Frequency>();
+      const auto start = range["start"].get<Frequency>();
+      const auto stop = range["stop"].get<Frequency>();
+      const auto fft = range.contains("fft") ? stoi(device["fft"].get<std::string>()) : 0;
+      ranges.push_back({start, stop, sampleRate, static_cast<Frequency>(fft)});
+    }
+    try {
+      if (ranges.empty()) {
+        Logger::warn("main", "empty ranges to scan, skipping device: {}", serial);
+      } else {
+        scanners.push_back(std::make_unique<SdrScanner>(config, coreManager, ranges, std::make_unique<T>(config, serial, offset, gains), mqtt));
       }
+    } catch (const std::exception& exception) {
+      Logger::error("main", "can not create scanner: {}", exception.what());
     }
   }
 }
 
-std::vector<std::unique_ptr<SdrScanner>> createScanners(const Config& config, Mqtt& mqtt) {
+std::vector<std::unique_ptr<SdrScanner>> createScanners(const Config& config, Mqtt& mqtt, CoreManager& coreManager) {
   std::vector<std::unique_ptr<SdrScanner>> scanners;
-  createScanners<HackrfSdrDevice>(config, mqtt, scanners);
-  createScanners<RtlSdrDevice>(config, mqtt, scanners);
+  createScanners<SoapySdrDevice>(config, mqtt, coreManager, scanners);
   return scanners;
 }
 
 int main(int argc, char* argv[]) {
   Logger::configure(spdlog::level::info, spdlog::level::off, "");
-  std::unique_ptr<Config> config;
-  if (argc >= 2) {
-    config = std::make_unique<Config>(argv[1], "");
-  } else {
-    config = std::make_unique<Config>("", "");
-  }
-  Logger::configure(config->logLevelConsole(), config->logLevelFile(), config->logDir());
-  Logger::info("main", "git commit: {}", GIT_COMMIT);
-  Logger::info("main", "git tag: {}", GIT_TAG);
+  dup2(fileno(fopen("/dev/null", "w")), fileno(stderr));
+  try {
+    std::unique_ptr<Config> config = std::make_unique<Config>(2 <= argc ? argv[1] : "config.json");
+    Logger::configure(config->logLevelConsole(), config->logLevelFile(), config->logDir());
+    SoapySdrDevice::setLogLevel();
+    Logger::info("main", "git commit: {}", GIT_COMMIT);
+    Logger::info("main", "git tag: {}", GIT_TAG);
 
 #ifndef NDEBUG
-  Logger::info("main", "build type: debug");
+    Logger::info("main", "build type: debug");
 #else
-  Logger::info("main", "build type: release");
+    Logger::info("main", "build type: release");
 #endif
 
-  config->log();
-  Logger::info("main", "start app auto_sdr");
-  Logger::info("main", "start thread id: {}", getThreadId());
-  try {
+    config->log();
+    Logger::info("main", "scanner id: {}", getId());
+    Logger::info("main", "start app auto_sdr");
+    Logger::info("main", "start thread id: {}", getThreadId());
+
     signal(SIGINT, handler);
     signal(SIGTERM, handler);
     bool reloadConfig = false;
     while (isRunning) {
       if (reloadConfig) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        config = std::make_unique<Config>(2 <= argc ? argv[1] : "config.json");
       }
       reloadConfig = false;
 
-      // FftwInitializer fftwInitializer(config->cores());
-      Mqtt mqtt(*config);
       for (const auto& ignoredFrequencyRange : config->ignoredFrequencyRanges()) {
         Logger::info("main", "ignored frequency, {}", ignoredFrequencyRange.toString());
       }
-      auto scanners = createScanners(*config, mqtt);
-
-      auto f = [&config, &reloadConfig, &scanners, argc, argv](const std::string& topic, const std::string& message) {
-        if (topic == "sdr/config") {
-          Logger::info("main", "reload config: {}", message);
-          if (argc >= 2) {
-            config = std::make_unique<Config>(argv[1], message);
-          } else {
-            config = std::make_unique<Config>("", message);
-          }
-          config->log();
-          reloadConfig = true;
-        } else if (topic == "sdr/manual_recording") {
-          try {
-            const auto data = nlohmann::json::parse(message);
-            const auto serial = data["serial"].get<std::string>();
-            const auto frequency = data["frequency"].get<Frequency>();
-            const auto sampleRate = data["sample_rate"].get<Frequency>();
-            const auto seconds = std::chrono::seconds(data["seconds"].get<uint32_t>());
-            for (auto& scanner : scanners) {
-              if (scanner->deviceSerial() == serial) {
-                scanner->manualRecording({frequency - sampleRate / 2, frequency + sampleRate / 2, 0, sampleRate}, seconds);
-              }
-            }
-          } catch (const nlohmann::json::parse_error& e) {
-            Logger::warn("main", "can not make manual recording: {}", e.what());
-          }
-        }
-      };
-      mqtt.setMessageCallback(f);
+      Mqtt mqtt(*config);
+      CoreManager coreManager(config->cores());
+      updateConfig<SoapySdrDevice>(*config);
+      std::vector<std::unique_ptr<SdrScanner>> scanners = createScanners(*config, mqtt, coreManager);
+      RemoteController rc(*config, mqtt, scanners, getId(), reloadConfig, isRunning);
 
       if (scanners.empty()) {
-        Logger::warn("main", "not found sdr devices");
+        Logger::warn("main", "no devices found in configuration");
+      }
+      while (isRunning && !reloadConfig) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (std::any_of(scanners.begin(), scanners.end(), [](const std::unique_ptr<SdrScanner>& scanner) { return !scanner->isRunning(); })) {
+          Logger::error("main", "some device stop working");
+          return 1;
+        }
+      }
+      if (!reloadConfig) {
         break;
-      } else {
-        while (isRunning && !scanners.empty() && !reloadConfig) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-          scanners.erase(std::remove_if(scanners.begin(), scanners.end(), [](const std::unique_ptr<SdrScanner>& scanner) { return !scanner->isRunning(); }), scanners.end());
-        }
-        if (!reloadConfig) {
-          break;
-        }
       }
     }
   } catch (const std::exception& exception) {
     Logger::error("main", "main exception: {}", exception.what());
+    return 1;
   }
   Logger::info("main", "stop app auto_sdr");
   Logger::info("main", "stop thread id: {}", getThreadId());

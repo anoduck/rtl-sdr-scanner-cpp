@@ -3,6 +3,7 @@
 #include <algorithms/decimator.h>
 #include <algorithms/signal_mediator.h>
 #include <algorithms/transmission_detector.h>
+#include <core_manager.h>
 #include <network/data_controller.h>
 #include <performance_logger.h>
 #include <radio/recorder_worker.h>
@@ -20,31 +21,26 @@
 
 class Recorder {
  public:
-  Recorder(const Config& config, int32_t offset, DataController& dataController);
+  Recorder(const Config& config, CoreManager& coreManager, int32_t offset, DataController& dataController);
   ~Recorder();
 
   void clear();
-  bool isTransmission(const std::chrono::milliseconds& time, const FrequencyRange& frequencyRange, std::vector<uint8_t>&& samples);
+  bool isTransmission(const std::chrono::milliseconds& time, const FrequencyRange& frequencyRange, std::vector<RawSample>&& samples);
   bool isTransmissionInProgress() const;
-  void processSamples(const std::chrono::milliseconds& time, const FrequencyRange& frequencyRange, std::vector<uint8_t>&& samples);
+  void processSamples(const std::chrono::milliseconds& time, const FrequencyRange& frequencyRange, std::vector<RawSample>&& samples);
 
  private:
   void processSignals(const std::chrono::milliseconds& time, const FrequencyRange& frequencyRange, const std::vector<Signal>& signals);
   const Config& m_config;
+  CoreManager& m_coreManager;
   const int32_t m_offset;
   DataController& m_dataController;
   TransmissionDetector m_transmissionDetector;
   SamplesProcessor m_samplesProcessor;
   PerformanceLogger m_performanceLogger;
-  std::vector<std::complex<float>> m_rawBuffer;
+  std::vector<ReadySample> m_rawBuffer;
   std::chrono::milliseconds m_lastDataTime;
   std::chrono::milliseconds m_lastActiveDataTime;
-
-  struct RecorderInputSamples {
-    std::chrono::milliseconds time;
-    std::vector<uint8_t> samples;
-    FrequencyRange frequencyRange;
-  };
 
   struct RecorderWorkerStruct {
     std::deque<WorkerInputSamples> samples;

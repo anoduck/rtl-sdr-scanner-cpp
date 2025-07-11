@@ -14,10 +14,22 @@ class SdrDevice {
  public:
   struct Samples {
     std::chrono::milliseconds time;
-    std::vector<uint8_t> data;
+    std::vector<RawSample> data;
+  };
+  struct Gain {
+    const std::string name;
+    const double min;
+    const double max;
+    const double step;
+  };
+  struct Device {
+    const std::string serial;
+    const std::string model;
+    const std::vector<Gain> gains;
+    const Frequency defaultSampleRate;
   };
 
-  SdrDevice(const std::string& name);
+  SdrDevice(const std::string serial, const int32_t offset);
   virtual ~SdrDevice() = default;
 
   virtual SdrDevice::Samples readData(const FrequencyRange& frequencyRange) = 0;
@@ -29,14 +41,15 @@ class SdrDevice {
   Samples getStreamData();
 
   virtual std::string name() const = 0;
-  virtual std::string serial() const = 0;
-  virtual int32_t offset() const = 0;
+  virtual std::string serial() const;
+  int32_t offset() const;
 
  protected:
+  const std::string m_serial;
+  const int32_t m_offset;
   uint32_t m_samplesSize;
-  uint32_t m_readSize;
   PerformanceLogger m_performanceLogger;
-  RingBuffer m_dataBuffer;
+  RingBuffer<RawSample> m_dataBuffer;
   boost::circular_buffer<std::chrono::milliseconds> m_timeBuffer;
   std::mutex m_mutex;
   std::condition_variable m_cv;
