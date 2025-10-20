@@ -1,33 +1,25 @@
 #include <gtest/gtest.h>
-#include <utils.h>
+#include <utils/utils.h>
 
-class UtilsTest : public ::testing::Test {
- public:
-  std::vector<FrequencyRange> calculate(Frequency start, Frequency stop, Frequency sampleRate, uint32_t fft) { return fitFrequencyRange({start, stop, sampleRate, fft}); }
-  FrequencyRange range(Frequency start, Frequency stop, Frequency sampleRate, uint32_t fft) { return {start, stop, sampleRate, fft}; }
-};
+TEST(Utils, AverageX) {
+  std::vector<float> input({1, 2, 3, 4, 5, 6, 7, 8, 9});
+  std::vector<float> output(input.size(), 0.0);
+  std::vector<float> result({2, 2.5, 3, 4, 5, 6, 7, 7.5, 8});
 
-TEST_F(UtilsTest, RtlSdrSingleRangeTest) {
-  const std::vector<FrequencyRange> results{range(144000000, 146000000, 2048000, 16384)};
-  EXPECT_EQ(results, calculate(144000000, 146000000, 2048000, 16384));
+  average(input.data(), output.data(), input.size(), 5);
+  for (size_t i = 0; i < result.size(); ++i) {
+    EXPECT_FLOAT_EQ(output[i], result[i]);
+  }
 }
 
-TEST_F(UtilsTest, RtlSdrSplitRangeTest) {
-  const std::vector<FrequencyRange> results{range(144000000, 146000000, 2048000, 16384), range(146000000, 148000000, 2048000, 16384)};
-  EXPECT_EQ(results, calculate(144000000, 148000000, 2048000, 16384));
+TEST(Utils, RoundUp) {
+  EXPECT_FLOAT_EQ(roundUp(19999999, 1000000), 20000000);
+  EXPECT_FLOAT_EQ(roundUp(20000000, 1000000), 20000000);
+  EXPECT_FLOAT_EQ(roundUp(20000001, 1000000), 21000000);
 }
 
-TEST_F(UtilsTest, HackRfSingleRangeTest) {
-  const std::vector<FrequencyRange> results{range(130000000, 150000000, 20480000, 16384)};
-  EXPECT_EQ(results, calculate(130000000, 150000000, 20480000, 16384));
-}
-
-TEST_F(UtilsTest, HackRfSplitRangeTest) {
-  const std::vector<FrequencyRange> results{range(130000000, 150000000, 20480000, 16384), range(150000000, 170000000, 20480000, 16384)};
-  EXPECT_EQ(results, calculate(130000000, 170000000, 20480000, 16384));
-}
-
-TEST_F(UtilsTest, Fft) {
-  EXPECT_EQ(countFft(2048000), 2048);
-  EXPECT_EQ(countFft(20480000), 16384);
+TEST(Utils, RoundDown) {
+  EXPECT_FLOAT_EQ(roundDown(19999999, 1000000), 19000000);
+  EXPECT_FLOAT_EQ(roundDown(20000000, 1000000), 20000000);
+  EXPECT_FLOAT_EQ(roundDown(20000001, 1000000), 20000000);
 }

@@ -1,20 +1,18 @@
 #include "mqtt.h"
 
 #include <logger.h>
-#include <utils.h>
+#include <utils/utils.h>
 
+constexpr auto LABEL = "mqtt";
 constexpr auto KEEP_ALIVE = 60;
 constexpr auto LOOP_TIMEOUT_MS = 100;
-constexpr auto QOS = 0;
-constexpr auto TOPIC_CONFIG = "sdr/config";
-constexpr auto TOPIC_MANUAL_RECORDING = "sdr/manual_recording";
+constexpr auto QOS_SUB = 2;
 constexpr auto RECONNECT_INTERVAL = std::chrono::seconds(1);
 constexpr auto QUEUE_MAX_SIZE = 1000;
 
 Mqtt::Mqtt(const Config &config)
     : m_client(mosquitto_new(nullptr, true, this)), m_isRunning(true), m_thread([this, config]() {
-        Logger::info("Mqtt", "start thread id: {}", getThreadId());
-        setThreadParams("mqtt", PRIORITY::LOW);
+        Logger::info(LABEL, "started");
         mosquitto_username_pw_set(m_client, config.mqttUsername().c_str(), config.mqttPassword().c_str());
         mosquitto_connect_callback_set(m_client, [](mosquitto *, void *p, int) { reinterpret_cast<Mqtt *>(p)->onConnect(); });
         mosquitto_disconnect_callback_set(m_client, [](mosquitto *, void *p, int) { reinterpret_cast<Mqtt *>(p)->onDisconnect(); });
@@ -23,13 +21,13 @@ Mqtt::Mqtt(const Config &config)
         while (m_isRunning) {
           mosquitto_loop(m_client, LOOP_TIMEOUT_MS, 1);
           while (m_isRunning && !m_messages.empty()) {
-            const auto &[topic, data] = m_messages.front();
-            mosquitto_publish(m_client, nullptr, topic.c_str(), data.size(), data.data(), QOS, false);
+            const auto &[topic, data, qos] = m_messages.front();
+            mosquitto_publish(m_client, nullptr, topic.c_str(), data.size(), data.data(), qos, false);
             std::unique_lock lock(m_mutex);
             m_messages.pop();
           }
         }
-        Logger::info("Mqtt", "stop thread id: {}", getThreadId());
+        Logger::info(LABEL, "stopped");
       }) {}
 
 Mqtt::~Mqtt() {
@@ -39,48 +37,60 @@ Mqtt::~Mqtt() {
   mosquitto_destroy(m_client);
 }
 
-void Mqtt::publish(const std::string &topic, const std::string &data) {
+void Mqtt::publish(const std::string &topic, const std::string &data, int qos) {
   std::unique_lock lock(m_mutex);
   if (m_messages.size() < QUEUE_MAX_SIZE) {
-    m_messages.emplace(topic, std::vector<uint8_t>{data.begin(), data.end()});
-    Logger::debug("Mqtt", "queue size: {}", m_messages.size());
+    m_messages.emplace(topic, std::vector<uint8_t>{data.begin(), data.end()}, qos);
+    Logger::trace(LABEL, "queue size: {}", m_messages.size());
   }
 }
 
-void Mqtt::publish(const std::string &topic, const std::vector<uint8_t> &data) {
+void Mqtt::publish(const std::string &topic, const std::vector<uint8_t> &data, int qos) {
   std::unique_lock lock(m_mutex);
   if (m_messages.size() < QUEUE_MAX_SIZE) {
-    m_messages.emplace(topic, data);
-    Logger::debug("Mqtt", "queue size: {}", m_messages.size());
+    m_messages.emplace(topic, data, qos);
+    Logger::trace(LABEL, "queue size: {}", m_messages.size());
   }
 }
 
-void Mqtt::publish(const std::string &topic, const std::vector<uint8_t> &&data) {
+void Mqtt::publish(const std::string &topic, const std::vector<uint8_t> &&data, int qos) {
   std::unique_lock lock(m_mutex);
   if (m_messages.size() < QUEUE_MAX_SIZE) {
-    m_messages.emplace(topic, std::move(data));
-    Logger::debug("Mqtt", "queue size: {}", m_messages.size());
+    m_messages.emplace(topic, std::move(data), qos);
+    Logger::trace(LABEL, "queue size: {}", m_messages.size());
   }
 }
 
-void Mqtt::setMessageCallback(std::function<void(const std::string &, const std::string &)> callback) { m_callbacks.push_back(callback); }
+void Mqtt::setMessageCallback(const std::string &topic, std::function<void(const std::string &)> callback) {
+  subscribe(topic);
+  m_callbacks.emplace_back(topic, callback);
+}
+
+void Mqtt::subscribe(const std::string &topic) {
+  if (m_topics.count(topic) == 0) {
+    mosquitto_subscribe(m_client, nullptr, topic.c_str(), QOS_SUB);
+    m_topics.insert(topic);
+  }
+}
 
 void Mqtt::onConnect() {
-  Logger::info("Mqtt", "connected");
-  mosquitto_subscribe(m_client, nullptr, TOPIC_CONFIG, QOS);
-  mosquitto_subscribe(m_client, nullptr, TOPIC_MANUAL_RECORDING, QOS);
+  Logger::info(LABEL, "connected");
+  for (const auto &topic : m_topics) {
+    Logger::info(LABEL, "subscribe: {}", colored(GREEN, "{}", topic));
+    mosquitto_subscribe(m_client, nullptr, topic.c_str(), QOS_SUB);
+  }
 }
 
 void Mqtt::onDisconnect() {
   if (!m_isRunning) {
     return;
   }
-  Logger::warn("Mqtt", "disconnected");
+  Logger::warn(LABEL, "disconnected");
   while (m_isRunning && mosquitto_reconnect(m_client) != MOSQ_ERR_SUCCESS) {
-    Logger::info("Mqtt", "reconnecting");
+    Logger::info(LABEL, "reconnecting");
     std::this_thread::sleep_for(RECONNECT_INTERVAL);
   }
-  Logger::info("Mqtt", "reconnecting success");
+  Logger::info(LABEL, "reconnecting success");
   std::unique_lock lock(m_mutex);
   while (!m_messages.empty()) {
     m_messages.pop();
@@ -88,10 +98,11 @@ void Mqtt::onDisconnect() {
 }
 
 void Mqtt::onMessage(const mosquitto_message *message) {
-  Logger::info("Mqtt", "topic: {}, data: {}", message->topic, static_cast<char *>(message->payload));
-  const std::string topic(message->topic);
+  Logger::debug(LABEL, "topic: {}, data: {}", message->topic, static_cast<char *>(message->payload));
   const std::string data(static_cast<char *>(message->payload), message->payloadlen);
-  for (auto &callback : m_callbacks) {
-    callback(topic, data);
+  for (auto &[topic, callback] : m_callbacks) {
+    if (strcmp(message->topic, topic.c_str()) == 0) {
+      callback(data);
+    }
   }
 }

@@ -1,83 +1,13 @@
 #include "config.h"
 
+#include <config_migrator.h>
 #include <logger.h>
+#include <radio/sdr_device_reader.h>
+#include <utils/utils.h>
 
-// experts only
-constexpr auto RESAMPLER_FILTER_LENGTH = 1;
-constexpr auto SPECTROGAM_FACTOR = 0.1f;
+constexpr auto LABEL = "config";
 
-std::string UserDefinedFrequencyRange::toString() const {
-  return frequencyToString(start, "start") + ", " + frequencyToString(stop, "stop") + ", " + frequencyToString(sampleRate, "sample rate") + ", fft: " + std::to_string(fft);
-}
-
-nlohmann::json readJsonFromFile(const std::string &path) {
-  if (path.empty()) {
-    Logger::warn("config", "no config file provided, using default config");
-    return {};
-  }
-  constexpr auto BUFFER_SIZE = 1024 * 1024;
-  FILE *file = fopen(path.c_str(), "r");
-
-  if (file) {
-    char buffer[BUFFER_SIZE];
-    const auto size = fread(buffer, 1, BUFFER_SIZE, file);
-    fclose(file);
-    try {
-      return nlohmann::json::parse(std::string{buffer, size});
-    } catch (const nlohmann::json::parse_error &exception) {
-      Logger::warn("config", "can not parse {}: not valid json format (fix your config), using default config", path);
-      return {};
-    }
-  } else {
-    Logger::warn("config", "can not read {}: file not found, using default config", path);
-    return {};
-  }
-}
-
-Config::InternalJson getInternalJson(const std::string &path, const std::string &data) {
-  Config::InternalJson internalJson;
-  internalJson.slaveJson = readJsonFromFile(path);
-  try {
-    internalJson.masterJson = nlohmann::json::parse(data);
-  } catch (const nlohmann::json::parse_error &) {
-  }
-  return internalJson;
-}
-
-template <typename T>
-T readKey(const nlohmann::json &json, const std::vector<std::string> &keys) {
-  nlohmann::json tmp = json;
-  for (const auto &key : keys) {
-    tmp = tmp[key];
-  }
-  if (tmp.empty()) {
-    throw std::runtime_error("readKey exception: empty value");
-  }
-  return tmp.get<T>();
-}
-
-template <typename T>
-T readKey(const Config::InternalJson &json, const std::vector<std::string> &keys, const T defaultValue) {
-  try {
-    return readKey<T>(json.masterJson, keys);
-  } catch (const std::runtime_error &) {
-    try {
-      return readKey<T>(json.slaveJson, keys);
-    } catch (const std::runtime_error &) {
-      constexpr auto SIZE = 2048;
-      char tmp[SIZE];
-      int offset = 0;
-      offset += snprintf(tmp + offset, SIZE - offset, "can not read: ");
-      for (const auto &key : keys) {
-        offset += snprintf(tmp + offset, SIZE - offset, "%s.", key.c_str());
-      }
-      Logger::warn("config", tmp);
-      return defaultValue;
-    }
-  }
-}
-
-spdlog::level::level_enum parseLogLevel(const std::string &level) {
+spdlog::level::level_enum parseLogLevel(const std::string& level) {
   if (level == "trace")
     return spdlog::level::level_enum::trace;
   else if (level == "debug")
@@ -93,137 +23,127 @@ spdlog::level::level_enum parseLogLevel(const std::string &level) {
   return spdlog::level::level_enum::off;
 }
 
-std::vector<UserDefinedFrequencyRanges> parseFrequenciesRanges(const nlohmann::json &json, const std::string &key) {
-  if (!json.contains(key) || json[key].empty()) {
-    throw std::runtime_error("parseFrequenciesRanges exception: empty value");
-  }
-  std::vector<UserDefinedFrequencyRanges> ranges;
-  for (const nlohmann::json &value : json[key]) {
-    const auto deviceSerial = value["device_serial"].get<std::string>();
-    std::vector<UserDefinedFrequencyRange> subRanges;
-    for (const nlohmann::json &subValue : value["ranges"]) {
-      const auto start = subValue["start"].get<Frequency>();
-      const auto stop = subValue["stop"].get<Frequency>();
-      const auto sampleRate = subValue["sample_rate"].get<Frequency>();
-      const auto fft = subValue.contains("fft") ? subValue["fft"].get<Frequency>() : 0;
-      subRanges.push_back({start, stop, sampleRate, fft});
+std::string getEnv(const std::string& key) {
+  const auto value = std::getenv(key.c_str());
+  if (value) {
+    if (key.find("PASSWORD") == std::string::npos) {
+      Logger::info(LABEL, "read env variable, key: {}, value: {}", colored(GREEN, "{}", key), colored(GREEN, "{}", value));
+    } else {
+      Logger::info(LABEL, "read env variable, key: {}, value: {}", colored(GREEN, "{}", key), colored(GREEN, "{}", "*****"));
     }
-    ranges.push_back({deviceSerial, subRanges});
+    return {value};
+  } else {
+    throw std::runtime_error(fmt::format("key not found in env: {}", key));
   }
-  return ranges;
 }
 
-std::vector<UserDefinedFrequencyRanges> parseFrequenciesRanges(const Config::InternalJson &json, const std::string &key) {
+template <typename T>
+T readKey(const nlohmann::json& json, const std::vector<std::string>& keys) {
+  std::string key;
   try {
-    return parseFrequenciesRanges(json.masterJson, key);
-  } catch (const std::exception &) {
-    try {
-      return parseFrequenciesRanges(json.slaveJson, key);
-    } catch (const std::exception &) {
-      Logger::warn("config", "can not read: {}", key);
-      return {{"auto", {{144000000, 146000000, 2048000, 2048}}}};
+    nlohmann::json value = json;
+    for (const auto& _key : keys) {
+      value = value.at(_key);
+      key += _key + ".";
     }
+    key.pop_back();
+    Logger::info(LABEL, "read json variable, key: {}, value: {}", colored(GREEN, "{}", key), colored(GREEN, "{}", value.get<T>()));
+    return value.get<T>();
+  } catch (const std::exception& exception) {
+    throw std::runtime_error(fmt::format("key not found in json config: {}", key));
   }
 }
 
-IgnoredFrequencies parseIgnoredFrequencies(const nlohmann::json &json, const std::string &key) {
-  if (!json.contains(key) || !json[key].is_array()) {
-    throw std::runtime_error("parseFrequenciesRanges exception: empty value");
-  }
-  IgnoredFrequencies ignoredFrequencies;
-  for (const nlohmann::json &value : json[key]) {
-    const auto frequency = value["frequency"].get<Frequency>();
-    const auto bandwidth = value["bandwidth"].get<Frequency>();
-    ignoredFrequencies.push_back({frequency - bandwidth / 2, frequency + bandwidth / 2, 0, 0});
-  }
-  return ignoredFrequencies;
-}
-
-IgnoredFrequencies parseIgnoredFrequencies(const Config::InternalJson &json, const std::string &key) {
+std::vector<FrequencyRange> readIgnoredRanges(const nlohmann::json& json) {
+  constexpr auto KEY = "ignored_frequencies";
   try {
-    return parseIgnoredFrequencies(json.masterJson, key);
-  } catch (const std::exception &) {
-    try {
-      return parseIgnoredFrequencies(json.slaveJson, key);
-    } catch (const std::exception &) {
-      Logger::warn("config", "can not read: {}", key);
-      return {};
+    std::vector<FrequencyRange> ranges;
+    for (const auto& item : json.at(KEY)) {
+      const auto frequency = item.at("frequency").get<Frequency>();
+      const auto bandwidth = item.at("bandwidth").get<Frequency>();
+      ranges.emplace_back(frequency - bandwidth / 2, frequency + bandwidth / 2);
     }
+    return ranges;
+  } catch (const std::exception& exception) {
+    throw std::runtime_error(fmt::format("key not found or invalid value in json: {}", KEY));
   }
 }
 
-Config::Config(const std::string &path, const std::string &config)
-    : m_json(getInternalJson(path, config)),
-      m_userDefinedFrequencyRanges(parseFrequenciesRanges(m_json, "scanner_frequencies_ranges")),
-      m_ignoredFrequencies(parseIgnoredFrequencies(m_json, "ignored_frequencies")),
-      m_maxRecordingNoiseTime(std::chrono::milliseconds(readKey(m_json, {"recording", "max_noise_time_ms"}, 2000))),
-      m_minRecordingTime(std::chrono::milliseconds(readKey(m_json, {"recording", "min_time_ms"}, 1000))),
-      m_minRecordingSampleRate(readKey(m_json, {"recording", "min_sample_rate"}, 64000)),
-      m_frequencyGroupingSize(readKey(m_json, {"detection", "frequency_grouping_size"}, 10000)),
-      m_frequencyRangeScanningTime(std::chrono::milliseconds(readKey(m_json, {"detection", "frequency_range_scanning_time_ms"}, 100))),
-      m_noiseLearningTime(std::chrono::seconds(readKey(m_json, {"detection", "noise_learning_time_seconds"}, 10))),
-      m_noiseDetectionMargin(readKey(m_json, {"detection", "noise_detection_margin"}, 10)),
-      m_tornTransmissionLearningTime(std::chrono::seconds(readKey(m_json, {"detection", "torn_transmission_learning_time_seconds"}, 60))),
-      m_logsDirectory(readKey(m_json, {"output", "logs"}, std::string("sdr/logs"))),
-      m_consoleLogLevel(parseLogLevel(readKey(m_json, {"output", "console_log_level"}, std::string("info")))),
-      m_fileLogLevel(parseLogLevel(readKey(m_json, {"output", "file_log_level"}, std::string("info")))),
-      m_rtlSdrPpm(readKey(m_json, {"devices", "rtl_sdr", "ppm_error"}, 0)),
-      m_rtlSdrGain(readKey(m_json, {"devices", "rtl_sdr", "tuner_gain"}, 0.0)),
-      m_rtlSdrRadioOffset(readKey(m_json, {"devices", "rtl_sdr", "offset"}, 0)),
-      m_hackRfLnaGain(readKey(m_json, {"devices", "hack_rf", "lna_gain"}, 0)),
-      m_hackRfVgaGain(readKey(m_json, {"devices", "hack_rf", "vga_gain"}, 0)),
-      m_hackRfRadioOffset(readKey(m_json, {"devices", "hack_rf", "offset"}, 0)),
-      m_cores(readKey(m_json, {"cores"}, 4)),
-      m_memoryLimit(readKey(m_json, {"memory_limit_mb"}, 0)),
-      m_mqttHostname(readKey(m_json, {"mqtt", "hostname"}, std::string(""))),
-      m_mqttPort(readKey(m_json, {"mqtt", "port"}, 0)),
-      m_mqttUsername(readKey(m_json, {"mqtt", "username"}, std::string(""))),
-      m_mqttPassword(readKey(m_json, {"mqtt", "password"}, std::string(""))) {}
+Config::Config(const nlohmann::json& json)
+    : m_json(json),
+      m_devices(SdrDeviceReader::readDevices(json)),
+      m_isColorLogEnabled(readKey<bool>(json, {"output", "color_log_enabled"})),
+      m_consoleLogLevel(parseLogLevel(readKey<std::string>(json, {"output", "console_log_level"}))),
+      m_fileLogLevel(parseLogLevel(readKey<std::string>(json, {"output", "file_log_level"}))),
+      m_ignoredRanges(readIgnoredRanges(json)),
+      m_recordingBandwidth(readKey<Frequency>(json, {"recording", "min_sample_rate"})),
+      m_recordingMinTime(std::chrono::milliseconds(readKey<int>(json, {"recording", "min_time_ms"}))),
+      m_recordingTimeout(std::chrono::milliseconds(readKey<int>(json, {"recording", "max_noise_time_ms"}))),
+      m_recordingTuningStep(readKey<Frequency>(json, {"recording", "step"})),
+      m_workers(readKey<int>(json, {"workers"})),
+      m_mqttHostname(getEnv("MQTT_HOST")),
+      m_mqttPort(stoi(getEnv("MQTT_PORT_TCP"))),
+      m_mqttUsername(getEnv("MQTT_USER")),
+      m_mqttPassword(getEnv("MQTT_PASSWORD")) {}
 
-void Config::log() {
-  auto removeCredentials = [](const nlohmann::json &json) {
-    auto copy(json);
-    if (copy.contains("mqtt")) {
-      copy.erase("mqtt");
+Config Config::loadFromFile(const std::string& path) {
+  constexpr auto BUFFER_SIZE = 1024 * 1024;
+  FILE* file = fopen(path.c_str(), "r");
+
+  if (file) {
+    char buffer[BUFFER_SIZE];
+    const auto size = fread(buffer, 1, BUFFER_SIZE, file);
+    fclose(file);
+    try {
+      auto json = nlohmann::json::parse(std::string{buffer, size});
+      ConfigMigrator::update(json);
+      SdrDeviceReader::scanSoapyDevices(json);
+      ConfigMigrator::sort(json);
+      return Config(json);
+    } catch (const nlohmann::json::parse_error& exception) {
+      throw std::runtime_error(fmt::format("can not parse config file, invalid json format: {}", path));
     }
-    return copy;
-  };
-  Logger::info("config", "data: {}", removeCredentials(m_json.masterJson).dump());
-  Logger::info("config", "file: {}", removeCredentials(m_json.slaveJson).dump());
+  } else {
+    throw std::runtime_error(fmt::format("can not parse config file, file not found: {}", path));
+  }
 }
 
-std::vector<UserDefinedFrequencyRanges> Config::userDefinedFrequencyRanges() const { return m_userDefinedFrequencyRanges; }
-IgnoredFrequencies Config::ignoredFrequencyRanges() const { return m_ignoredFrequencies; }
+void Config::saveToFile(const std::string& path, const nlohmann::json& json) {
+  FILE* file = fopen(path.c_str(), "w");
+  if (file) {
+    auto tmp = json;
+    SdrDeviceReader::clearDevices(tmp);
+    const auto data = tmp.dump(4, ' ');
+    if (fwrite(data.c_str(), 1, data.size(), file) != data.size()) {
+      Logger::warn(LABEL, "save new config failed");
+    }
+    fclose(file);
+  } else {
+    Logger::warn(LABEL, "save new config failed");
+  }
+}
 
-std::chrono::milliseconds Config::maxRecordingNoiseTime() const { return m_maxRecordingNoiseTime; }
-std::chrono::milliseconds Config::minRecordingTime() const { return m_minRecordingTime; }
-Frequency Config::minRecordingSampleRate() const { return m_minRecordingSampleRate; }
+nlohmann::json Config::json() const { return m_json; }
+std::string Config::mqtt() const { return fmt::format("{}@{}:{}", m_mqttUsername, m_mqttHostname, m_mqttPort); };
 
-std::chrono::milliseconds Config::frequencyRangeScanningTime() const { return m_frequencyRangeScanningTime; }
-Frequency Config::frequencyGroupingSize() const { return m_frequencyGroupingSize; }
-std::chrono::seconds Config::noiseLearningTime() const { return m_noiseLearningTime; }
-uint32_t Config::noiseDetectionMargin() const { return m_noiseDetectionMargin; }
-std::chrono::seconds Config::tornTransmissionLearningTime() const { return m_tornTransmissionLearningTime; }
+std::vector<Device> Config::devices() const { return m_devices; }
 
-spdlog::level::level_enum Config::logLevelFile() const { return m_fileLogLevel; }
-spdlog::level::level_enum Config::logLevelConsole() const { return m_consoleLogLevel; }
-std::string Config::logDir() const { return m_logsDirectory; }
+bool Config::isColorLogEnabled() const { return m_isColorLogEnabled; }
+spdlog::level::level_enum Config::consoleLogLevel() const { return m_consoleLogLevel; }
+spdlog::level::level_enum Config::fileLogLevel() const { return m_fileLogLevel; }
 
-uint32_t Config::rtlSdrPpm() const { return m_rtlSdrPpm; }
-float Config::rtlSdrGain() const { return m_rtlSdrGain; }
-int32_t Config::rtlSdrOffset() const { return m_rtlSdrRadioOffset; }
-
-uint32_t Config::hackRfLnaGain() const { return m_hackRfLnaGain; }
-uint32_t Config::hackRfVgaGain() const { return m_hackRfVgaGain; }
-int32_t Config::hackRfOffset() const { return m_hackRfRadioOffset; }
-
-uint8_t Config::cores() const { return std::max(uint8_t(1), m_cores); }
-uint64_t Config::memoryLimit() const { return m_memoryLimit; }
+std::vector<FrequencyRange> Config::ignoredRanges() const { return m_ignoredRanges; }
+int Config::recordersCount() const {
+  const auto max_workers = static_cast<int>(std::thread::hardware_concurrency() / 2);
+  const auto workers = std::max(0, std::min(m_workers, max_workers));
+  return workers == 0 ? max_workers : workers;
+}
+Frequency Config::recordingBandwidth() const { return m_recordingBandwidth; }
+std::chrono::milliseconds Config::recordingMinTime() const { return m_recordingMinTime; }
+std::chrono::milliseconds Config::recordingTimeout() const { return m_recordingTimeout; }
+Frequency Config::recordingTuningStep() const { return m_recordingTuningStep; }
 
 std::string Config::mqttHostname() const { return m_mqttHostname; }
 int Config::mqttPort() const { return m_mqttPort; }
 std::string Config::mqttUsername() const { return m_mqttUsername; }
 std::string Config::mqttPassword() const { return m_mqttPassword; }
-
-uint32_t Config::resamplerFilterLength() const { return RESAMPLER_FILTER_LENGTH; }
-float Config::spectrogramFactor() const { return SPECTROGAM_FACTOR; }

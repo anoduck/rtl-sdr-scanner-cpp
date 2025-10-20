@@ -1,43 +1,48 @@
 #pragma once
 
-#include <performance_logger.h>
+#include <gnuradio/soapy/source.h>
+#include <gnuradio/top_block.h>
+#include <network/data_controller.h>
+#include <network/mqtt.h>
+#include <notification.h>
+#include <radio/blocks/blocker.h>
+#include <radio/blocks/file_sink.h>
+#include <radio/blocks/noise_learner.h>
+#include <radio/blocks/sdr_source.h>
+#include <radio/blocks/transmission.h>
 #include <radio/help_structures.h>
-#include <ring_buffer.h>
+#include <radio/recorder.h>
 
-#include <boost/circular_buffer.hpp>
-#include <condition_variable>
-#include <cstdint>
-#include <functional>
-#include <mutex>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
 
 class SdrDevice {
  public:
-  struct Samples {
-    std::chrono::milliseconds time;
-    std::vector<uint8_t> data;
-  };
+  SdrDevice(const Config& config, const Device& device, Mqtt& mqtt, TransmissionNotification& notification, const int recordersCount);
+  ~SdrDevice();
 
-  SdrDevice(const std::string& name);
-  virtual ~SdrDevice() = default;
+  void setFrequencyRange(FrequencyRange frequencyRange);
+  void updateRecordings(const std::vector<FrequencyFlush> sortedShifts);
 
-  virtual SdrDevice::Samples readData(const FrequencyRange& frequencyRange) = 0;
+ private:
+  Frequency getFrequency() const;
+  void setupChains(const Config& config, const Device& device, TransmissionNotification& notification);
 
-  virtual void startStream(const FrequencyRange& frequencyRange) = 0;
-  virtual void stopStream() = 0;
-  void waitForData();
-  bool isDataAvailable();
-  Samples getStreamData();
+  const Frequency m_sampleRate;
+  bool m_isInitialized;
+  FrequencyRange m_frequencyRange;
+  DataController m_dataController;
 
-  virtual std::string name() const = 0;
-  virtual std::string serial() const = 0;
-  virtual int32_t offset() const = 0;
-
- protected:
-  uint32_t m_samplesSize;
-  uint32_t m_readSize;
-  PerformanceLogger m_performanceLogger;
-  RingBuffer m_dataBuffer;
-  boost::circular_buffer<std::chrono::milliseconds> m_timeBuffer;
-  std::mutex m_mutex;
-  std::condition_variable m_cv;
+  std::shared_ptr<gr::top_block> m_tb;
+  std::shared_ptr<SdrSource> m_source;
+  std::shared_ptr<Blocker> m_blocker;
+  std::shared_ptr<NoiseLearner> m_noiseLearner;
+  std::shared_ptr<Transmission> m_transmission;
+  std::vector<std::unique_ptr<Recorder>> m_recorders;
+  std::shared_ptr<FileSink<float>> m_powerFileSink;
+  std::shared_ptr<FileSink<gr_complex>> m_rawIqFileSink;
+  std::set<Frequency> ignoredTransmissions;
+  Connector m_connector;
 };

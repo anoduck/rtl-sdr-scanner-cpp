@@ -1,33 +1,30 @@
 #pragma once
 
+#include <notification.h>
+
+#include <algorithm>
+#include <complex>
 #include <cstdint>
+#include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
-using Frequency = uint32_t;
-using Power = float;
+using Frequency = int32_t;
+using FrequencyRange = std::pair<Frequency, Frequency>;
+using FrequencyFlush = std::pair<Frequency, bool>;
+using TransmissionNotification = Notification<std::vector<FrequencyFlush>>;
+using SimpleComplex = std::complex<int8_t>;
 
-std::string frequencyToString(const Frequency& frequency, const std::string& label = "frequency");
-std::string powerToString(const Power& power);
+struct Device {
+  bool m_enabled{};
+  std::vector<std::pair<std::string, float>> m_gains{};
+  std::string m_serial{};
+  std::string m_driver{};
+  Frequency m_sampleRate{};
+  std::vector<FrequencyRange> m_ranges{};
+  float m_startLevel{};
+  float m_stopLevel{};
 
-struct Signal {
-  std::string toString() const;
-
-  Frequency frequency;
-  Power power;
-};
-
-struct FrequencyRange {
-  FrequencyRange(const Frequency _start, const Frequency _stop, const Frequency _sampleRate, const uint32_t _fft);
-  std::string toString() const;
-
-  Frequency center() const;
-  Frequency step() const;
-
-  bool operator==(const FrequencyRange& rhs) const;
-  bool operator<(const FrequencyRange& rhs) const;
-
-  const Frequency start;
-  const Frequency stop;
-  const Frequency sampleRate;
-  const uint32_t fft;
+  std::string getName() const { return m_driver + "_" + m_serial; }
 };

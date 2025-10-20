@@ -1,104 +1,84 @@
 #pragma once
 
+#include <logger.h>
 #include <radio/help_structures.h>
-#include <spdlog/spdlog.h>
 
+#include <chrono>
 #include <nlohmann/json.hpp>
-#include <vector>
+#include <string>
 
-struct UserDefinedFrequencyRange {
-  const Frequency start;
-  const Frequency stop;
-  const Frequency sampleRate;
-  const Frequency fft;
+// INTERNAL SETTINGS
+constexpr auto DEBUG_SAVE_FULL_RAW_IQ = false;                            // save orgignal sdr data as raw iq
+constexpr auto DEBUG_SAVE_FULL_POWER = false;                             // save orgignal sdr data as raw iq
+constexpr auto DEBUG_SAVE_RECORDING_RAW_IQ = false;                       // save recordings as raw iq
+constexpr auto INITIAL_DELAY = std::chrono::milliseconds(1000);           // delay after first start sdr device to start processing
+constexpr auto LOG_FILE_NAME = "sdr_scanner.log";                         // log filename
+constexpr auto LOG_FILE_SIZE = 10 * 1024 * 1024;                          // single log file max size
+constexpr auto LOG_FILES_COUNT = 9;                                       // keep last n log files
+constexpr auto PERFORMANCE_LOGGER_INTERVAL = 1000;                        // print stats every n frames
+constexpr auto RECORDER_FLUSH_INTERVAL = std::chrono::milliseconds(100);  // flush recordings to mqtt every 2 * n bytes
+constexpr auto RESAMPLER_THRESHOLD = 125;                                 // max interpolation or decimation factor of RESAMPLER
+constexpr auto TRANSMISSION_MAX_TIME = std::chrono::minutes(10);          // break transmission if longer that
 
-  std::string toString() const;
-};
+// SCANNING SETTINGS
+constexpr auto NOISE_LEARNING_TIME = std::chrono::milliseconds(2000);  // noise learnig time
+constexpr auto RANGE_SCANNING_TIME = std::chrono::milliseconds(500);   // waiting time for transmission in single scanning range
 
-struct UserDefinedFrequencyRanges {
-  const std::string serial;
-  const std::vector<UserDefinedFrequencyRange> ranges;
-};
+// SIGNAL DETECTION SETTINGS
+constexpr auto GROUPING_X = 21;                    // average n frames in frequency domain
+constexpr auto GROUPING_Y = 21;                    // average n frames in time domain
+constexpr auto DEFAULT_RECORDING_START_LEVEL = 8;  // start recording if average power greather than n
+constexpr auto DEFAULT_RECORDING_STOP_LEVEL = 5;   // stop recording if average power lower than n
+constexpr auto SIGNAL_DETECTION_FPS = 50;          // reduce cpu usage
+constexpr auto SIGNAL_DETECTION_MAX_STEP = 250;    // max step after fft
 
-using IgnoredFrequencies = std::vector<FrequencyRange>;
+// SPECTROGRAM SETTINGS
+constexpr auto SPECTROGRAM_PREFERRED_MAX_STEP = 1000;                        // spectrogram preferred max step
+constexpr auto SPECTROGRAM_MAX_FFT = 16384;                                  // spectrogram fft limit
+constexpr auto SPECTROGRAM_SEND_INTERVAL = std::chrono::milliseconds(1000);  // send spectrogram data interval
 
 class Config {
  public:
-  struct InternalJson {
-    nlohmann::json masterJson;
-    nlohmann::json slaveJson;
-  };
+  static Config loadFromFile(const std::string& path);
+  static void saveToFile(const std::string& path, const nlohmann::json& json);
+  nlohmann::json json() const;
+  std::string mqtt() const;
 
-  Config(const std::string& path, const std::string& config);
-  void log();
+  std::vector<Device> devices() const;
 
-  std::vector<UserDefinedFrequencyRanges> userDefinedFrequencyRanges() const;
-  IgnoredFrequencies ignoredFrequencyRanges() const;
+  bool isColorLogEnabled() const;
+  spdlog::level::level_enum consoleLogLevel() const;
+  spdlog::level::level_enum fileLogLevel() const;
 
-  std::chrono::milliseconds maxRecordingNoiseTime() const;
-  std::chrono::milliseconds minRecordingTime() const;
-  Frequency minRecordingSampleRate() const;
-
-  Frequency frequencyGroupingSize() const;
-  std::chrono::milliseconds frequencyRangeScanningTime() const;
-  std::chrono::seconds noiseLearningTime() const;
-  uint32_t noiseDetectionMargin() const;
-  std::chrono::seconds tornTransmissionLearningTime() const;
-
-  spdlog::level::level_enum logLevelConsole() const;
-  spdlog::level::level_enum logLevelFile() const;
-  std::string logDir() const;
-
-  uint32_t rtlSdrPpm() const;
-  float rtlSdrGain() const;
-  int32_t rtlSdrOffset() const;
-
-  uint32_t hackRfLnaGain() const;
-  uint32_t hackRfVgaGain() const;
-  int32_t hackRfOffset() const;
-
-  uint8_t cores() const;
-  uint64_t memoryLimit() const;
+  std::vector<FrequencyRange> ignoredRanges() const;
+  int recordersCount() const;
+  Frequency recordingBandwidth() const;
+  std::chrono::milliseconds recordingMinTime() const;
+  std::chrono::milliseconds recordingTimeout() const;
+  Frequency recordingTuningStep() const;
 
   std::string mqttHostname() const;
   int mqttPort() const;
   std::string mqttUsername() const;
   std::string mqttPassword() const;
 
-  // experts only
-  uint32_t resamplerFilterLength() const;
-  float spectrogramFactor() const;
-
  private:
-  const InternalJson m_json;
+  Config(const nlohmann::json& json);
 
-  const std::vector<UserDefinedFrequencyRanges> m_userDefinedFrequencyRanges;
-  const IgnoredFrequencies m_ignoredFrequencies;
+  const nlohmann::json m_json;
 
-  const std::chrono::milliseconds m_maxRecordingNoiseTime;
-  const std::chrono::milliseconds m_minRecordingTime;
-  const Frequency m_minRecordingSampleRate;
+  const std::vector<Device> m_devices;
 
-  const Frequency m_frequencyGroupingSize;
-  const std::chrono::milliseconds m_frequencyRangeScanningTime;
-  const std::chrono::seconds m_noiseLearningTime;
-  const uint32_t m_noiseDetectionMargin;
-  const std::chrono::seconds m_tornTransmissionLearningTime;
-
-  const std::string m_logsDirectory;
+  const bool m_isColorLogEnabled;
   const spdlog::level::level_enum m_consoleLogLevel;
   const spdlog::level::level_enum m_fileLogLevel;
 
-  const uint32_t m_rtlSdrPpm;
-  const float m_rtlSdrGain;
-  const int32_t m_rtlSdrRadioOffset;
-
-  const uint32_t m_hackRfLnaGain;
-  const uint32_t m_hackRfVgaGain;
-  const int32_t m_hackRfRadioOffset;
-
-  const uint8_t m_cores;
-  const uint64_t m_memoryLimit;
+  const std::vector<FrequencyRange> m_ignoredRanges;
+  const Frequency m_recordingBandwidth;
+  const std::chrono::milliseconds m_recordingMinTime;
+  const std::chrono::milliseconds m_recordingTimeout;
+  const Frequency m_recordingTuningStep;
+  const int m_workers;
 
   const std::string m_mqttHostname;
   const int m_mqttPort;
